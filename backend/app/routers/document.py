@@ -1,5 +1,6 @@
 import os
 from typing import List
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -8,6 +9,7 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.document import Document
 from app.models.chunk import DocumentChunk
+from app.models.chat_session import ChatSession, ChatSessionCollaborator
 from app.schemas.document import DocumentResponse
 from app.services.pdf_service import save_pdf, extract_text
 from app.services.embedding_service import generate_embeddings
@@ -110,11 +112,22 @@ def list_documents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    documents = db.query(Document).filter(
+    # Owned documents
+    owned = db.query(Document).filter(
         Document.user_id == current_user.id
-    ).order_by(Document.uploaded_at.desc()).all()
-
-    return documents
+    ).all()
+    
+    # Collaborative documents (documents the user is a collaborator on via chat sessions)
+    shared = db.query(Document).join(ChatSession).join(
+        ChatSessionCollaborator, ChatSessionCollaborator.session_id == ChatSession.id
+    ).filter(
+        ChatSessionCollaborator.user_id == current_user.id
+    ).all()
+    
+    # Merge lists uniquely
+    combined = list({doc.id: doc for doc in (owned + shared)}.values())
+    combined.sort(key=lambda d: d.uploaded_at, reverse=True)
+    return combined
 
 
 # -----------------------------
@@ -126,15 +139,24 @@ def get_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id
-    ).first()
-
+    doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found"
+        )
+
+    # Check access permission
+    is_owner = doc.user_id == current_user.id
+    is_collaborator = db.query(ChatSessionCollaborator).join(ChatSession).filter(
+        ChatSession.document_id == document_id,
+        ChatSessionCollaborator.user_id == current_user.id
+    ).first() is not None
+
+    if not is_owner and not is_collaborator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this document"
         )
 
     return doc
@@ -197,16 +219,24 @@ def keyword_search(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Verify ownership
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id
-    ).first()
-
+    doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found"
+        )
+
+    # Check access permission
+    is_owner = doc.user_id == current_user.id
+    is_collaborator = db.query(ChatSessionCollaborator).join(ChatSession).filter(
+        ChatSession.document_id == document_id,
+        ChatSessionCollaborator.user_id == current_user.id
+    ).first() is not None
+
+    if not is_owner and not is_collaborator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this document"
         )
 
     if not query.strip():
