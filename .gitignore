@@ -1,0 +1,44 @@
+# Root gitignore for Student Notes Chatbot project
+
+# Environment variables (secrets)
+.env
+.env.*
+*.env
+backend/.env
+
+# Python byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+**/__pycache__/
+**/*.py[cod]
+
+# Python virtual environment
+backend/env/
+env/
+venv/
+.venv/
+
+# Node modules
+node_modules/
+frontend/node_modules/
+
+# Local build outputs
+frontend/dist/
+frontend/dist-ssr/
+
+# User uploads and FAISS search indexes (usually kept local)
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/faiss_indexes/*
+!backend/faiss_indexes/.gitkeep
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
