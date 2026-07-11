@@ -25,7 +25,7 @@ class ChatSession(Base):
     )
     share_code = Column(String(100), unique=True, index=True, nullable=True)
 
-    document = relationship("Document")
+    document = relationship("Document", back_populates="sessions")
     user = relationship("User")
     messages = relationship(
         "ChatMessage",

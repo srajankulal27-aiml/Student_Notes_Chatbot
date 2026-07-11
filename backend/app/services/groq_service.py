@@ -37,30 +37,37 @@ def call_groq_completions(messages: list[dict], temperature: float = 0.3, max_to
         "Content-Type": "application/json"
     }
     
-    data = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens
-    }
+    models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-8b-8192"]
+    last_error = None
 
-    try:
-        response = requests.post(GROQ_API_URL, json=data, headers=headers, timeout=30)
-        if response.status_code == 200:
-            res_json = response.json()
-            return res_json["choices"][0]["message"]["content"]
-        else:
-            print(f"Groq API error: {response.status_code} - {response.text}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Groq API error: {response.status_code} - {response.text}"
-            )
-    except Exception as e:
-        print(f"Exception during Groq API call: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reach Groq services: {str(e)}"
-        )
+    for model in models_to_try:
+        data = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+
+        try:
+            response = requests.post(GROQ_API_URL, json=data, headers=headers, timeout=30)
+            if response.status_code == 200:
+                res_json = response.json()
+                return res_json["choices"][0]["message"]["content"]
+            elif response.status_code == 429:
+                print(f"Rate limited on model {model}. Trying fallback...")
+                last_error = f"Rate limited (429): {response.text}"
+                continue
+            else:
+                print(f"Groq API error for model {model}: {response.status_code} - {response.text}")
+                last_error = f"API error: {response.status_code} - {response.text}"
+        except Exception as e:
+            print(f"Exception during Groq API call for model {model}: {e}")
+            last_error = str(e)
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"Failed to reach Groq services after trying fallback models. Last error: {last_error}"
+    )
 
 
 def generate_answer(context: str, question: str, history: list[dict] = None, filename: str = "Notes") -> str:
@@ -100,6 +107,7 @@ RULES:
 2. QUESTION ANSWERING: For any informational or notes-related question, you must base your entire response on the "Notes Context" text blocks.
 3. STRICT FALLBACK: If the answer cannot be directly found in the "Notes Context", you must output: "I couldn't find this information in the uploaded notes."
 4. FORMATTING: Present all information in a beautifully structured, comprehensive format using clear Markdown headings, bold keywords, and neat bullet lists to make it highly readable.
+5. NO VISUALS OR IMAGES: Do NOT output any images, figures, diagrams, or external image links. Present all information in text/markdown format only. Do not attempt to generate Mermaid diagrams or draw illustrations.
 
 Notes Context:
 {context}

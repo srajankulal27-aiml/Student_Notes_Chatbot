@@ -105,3 +105,45 @@ def delete_file_from_s3(file_url: str) -> None:
         print(f"Successfully deleted {object_key} from S3.")
     except Exception as e:
         print(f"Failed to delete S3 object {file_url}: {e}")
+
+
+def upload_bytes_to_s3(bytes_data: bytes, filename: str, content_type: str) -> str:
+    """
+    Why it is written:
+        To store raw bytes (like extracted PDF images) directly inside an AWS S3 bucket.
+
+    What it does:
+        Uploads the raw bytes to the S3 bucket and returns a pre-signed URL valid for 7 days.
+
+    Inputs:
+        bytes_data: bytes - The binary data of the file.
+        filename: str - The path/key under which the file should be stored.
+        content_type: str - The MIME type of the file (e.g. image/png).
+
+    Outputs:
+        str - The pre-signed S3 URL.
+    """
+    if not s3_client or not AWS_STORAGE_BUCKET_NAME:
+        raise ValueError("AWS S3 credentials not configured. Please check your environment variables.")
+
+    try:
+        s3_client.put_object(
+            Bucket=AWS_STORAGE_BUCKET_NAME,
+            Key=filename,
+            Body=bytes_data,
+            ContentType=content_type
+        )
+        
+        # Generate a pre-signed URL valid for 7 days
+        presigned_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": AWS_STORAGE_BUCKET_NAME,
+                "Key": filename
+            },
+            ExpiresIn=604800 # 7 days
+        )
+        return presigned_url
+    except Exception as e:
+        print(f"Exception during S3 bytes upload: {e}")
+        raise e

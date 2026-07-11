@@ -1,6 +1,7 @@
-from typing import List
+from typing import List, Optional
 # pyrefly: ignore [missing-import]
 from fastapi import APIRouter, UploadFile, File, Depends, status, Response, HTTPException
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,7 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.document import DocumentResponse
 from app.services import document_service
+from app.utils.token import verify_access_token
 
 router = APIRouter(
     prefix="/documents",
@@ -137,11 +139,40 @@ def keyword_search(
     return document_service.search_document_keywords(document_id, query, db, current_user)
 
 
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
+
+def get_user_from_header_or_query(
+    token_header: Optional[str] = Depends(oauth2_scheme_optional),
+    token: Optional[str] = None,
+    db: Session = Depends(get_db)
+) -> User:
+    tok = token_header or token
+    if not tok:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token is required"
+        )
+    payload = verify_access_token(tok)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials"
+        )
+    email = payload.get("sub")
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+    return user
+
+
 @router.get("/{document_id}/download")
 def download_document(
     document_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_user_from_header_or_query)
 ):
     """
     Why it is written:

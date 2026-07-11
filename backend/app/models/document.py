@@ -41,3 +41,9 @@ class Document(Base):
         back_populates="document",
         cascade="all, delete-orphan"
     )
+
+    sessions = relationship(
+        "ChatSession",
+        back_populates="document",
+        cascade="all, delete-orphan"
+    )

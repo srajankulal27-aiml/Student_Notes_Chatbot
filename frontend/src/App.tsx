@@ -19,10 +19,105 @@ import {
 
 const API_BASE = "http://localhost:8000";
 
+interface ContentBlock {
+  type: "text" | "code" | "mermaid" | "image";
+  content: string;
+  language?: string;
+  alt?: string;
+  url?: string;
+}
+
+const safeBase64 = (str: string): string => {
+  try {
+    return btoa(
+      encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) => {
+        return String.fromCharCode(parseInt(p1, 16));
+      })
+    );
+  } catch (e) {
+    return btoa(str);
+  }
+};
+
+function parseContentToBlocks(content: string): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  let currentIndex = 0;
+
+  while (currentIndex < content.length) {
+    const remaining = content.substring(currentIndex);
+    const codeBlockMatch = remaining.match(/```(\w*)\n([\s\S]*?)\n?```/);
+    const imageMatch = remaining.match(/!\[(.*?)\]\((.*?)\)/);
+
+    let nextMatch: {
+      type: "code" | "image";
+      index: number;
+      length: number;
+      matchObj: RegExpMatchArray;
+    } | null = null;
+
+    if (codeBlockMatch && codeBlockMatch.index !== undefined) {
+      nextMatch = {
+        type: "code",
+        index: codeBlockMatch.index,
+        length: codeBlockMatch[0].length,
+        matchObj: codeBlockMatch
+      };
+    }
+
+    if (imageMatch && imageMatch.index !== undefined) {
+      if (!nextMatch || imageMatch.index < nextMatch.index) {
+        nextMatch = {
+          type: "image",
+          index: imageMatch.index,
+          length: imageMatch[0].length,
+          matchObj: imageMatch
+        };
+      }
+    }
+
+    if (!nextMatch) {
+      const text = remaining;
+      if (text) {
+        blocks.push({ type: "text", content: text });
+      }
+      break;
+    }
+
+    if (nextMatch.index > 0) {
+      const text = remaining.substring(0, nextMatch.index);
+      if (text) {
+        blocks.push({ type: "text", content: text });
+      }
+    }
+
+    if (nextMatch.type === "code") {
+      const lang = nextMatch.matchObj[1]?.toLowerCase() || "text";
+      const codeContent = nextMatch.matchObj[2];
+      blocks.push({
+        type: lang === "mermaid" ? "mermaid" : "code",
+        content: codeContent,
+        language: lang
+      });
+    } else {
+      const alt = nextMatch.matchObj[1];
+      const url = nextMatch.matchObj[2];
+      blocks.push({
+        type: "image",
+        content: "",
+        alt,
+        url
+      });
+    }
+
+    currentIndex += nextMatch.index + nextMatch.length;
+  }
+
+  return blocks;
+}
+
 function formatMessageContent(content: string): React.ReactNode {
   if (!content) return null;
-  const lines = content.split("\n");
-  
+
   const parseInline = (text: string): React.ReactNode => {
     const parts: React.ReactNode[] = [];
     const regex = /\*\*([\s\S]*?)\*\*/g;
@@ -42,55 +137,211 @@ function formatMessageContent(content: string): React.ReactNode {
     return parts.length > 0 ? <>{parts}</> : text;
   };
 
+  const renderTextBlock = (text: string, blockIdx: number) => {
+    const lines = text.split("\n");
+    return (
+      <div key={`text-block-${blockIdx}`} style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+        {lines.map((line, idx) => {
+          const trimmed = line.trim();
+          
+          if (trimmed.startsWith("### ")) {
+            return (
+              <h4 key={idx} style={{ margin: "0.8rem 0 0.4rem 0", color: "#fff", fontWeight: 600, fontSize: "0.95rem" }}>
+                {parseInline(trimmed.substring(4))}
+              </h4>
+            );
+          }
+          if (trimmed.startsWith("## ")) {
+            return (
+              <h3 key={idx} style={{ margin: "1rem 0 0.5rem 0", color: "#fff", fontWeight: 700, fontSize: "1.1rem" }}>
+                {parseInline(trimmed.substring(3))}
+              </h3>
+            );
+          }
+          if (trimmed.startsWith("# ")) {
+            return (
+              <h2 key={idx} style={{ margin: "1.2rem 0 0.6rem 0", color: "#fff", fontWeight: 700, fontSize: "1.25rem" }}>
+                {parseInline(trimmed.substring(2))}
+              </h2>
+            );
+          }
+          if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+            return (
+              <li key={idx} style={{ marginLeft: "1.2rem", marginBottom: "0.2rem", listStyleType: "disc" }}>
+                {parseInline(trimmed.substring(2))}
+              </li>
+            );
+          }
+          const numMatch = trimmed.match(/^(\d+)\.\s(.*)/);
+          if (numMatch) {
+            return (
+              <li key={idx} style={{ marginLeft: "1.2rem", marginBottom: "0.2rem", listStyleType: "decimal" }}>
+                {parseInline(numMatch[2])}
+              </li>
+            );
+          }
+          if (trimmed === "") {
+            return <div key={idx} style={{ height: "0.3rem" }} />;
+          }
+          return (
+            <p key={idx} style={{ margin: 0, lineHeight: "1.5" }}>
+              {parseInline(line)}
+            </p>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const blocks = parseContentToBlocks(content);
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-      {lines.map((line, idx) => {
-        const trimmed = line.trim();
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem", width: "100%" }}>
+      {blocks.map((block, idx) => {
+        if (block.type === "text") {
+          return renderTextBlock(block.content, idx);
+        }
         
-        if (trimmed.startsWith("### ")) {
+        if (block.type === "mermaid") {
+          let mermaidCode = block.content.trim();
+          if (!mermaidCode.includes("%%{init")) {
+            mermaidCode = `%%{init: {'theme': 'dark'}}%%\n` + mermaidCode;
+          }
+          const base64 = safeBase64(mermaidCode);
+          const diagramUrl = `https://mermaid.ink/img/${base64}?bgColor=131622`;
+          
           return (
-            <h4 key={idx} style={{ margin: "0.8rem 0 0.4rem 0", color: "#fff", fontWeight: 600, fontSize: "0.95rem" }}>
-              {parseInline(trimmed.substring(4))}
-            </h4>
+            <div
+              key={`mermaid-${idx}`}
+              className="glass-panel"
+              style={{
+                padding: "1.25rem",
+                borderRadius: "var(--radius-md)",
+                background: "rgba(19, 22, 34, 0.8)",
+                border: "1px solid rgba(255, 255, 255, 0.08)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "1rem",
+                width: "100%",
+                maxWidth: "100%",
+                overflowX: "auto",
+                margin: "0.5rem 0"
+              }}
+            >
+              <div style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "0.5rem" }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                  <Sparkles size={12} color="var(--color-accent-indigo)" />
+                  AI Concept Diagram
+                </span>
+                <a
+                  href={diagramUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    fontSize: "0.7rem",
+                    color: "var(--color-accent-indigo)",
+                    textDecoration: "none",
+                    background: "rgba(99, 102, 241, 0.1)",
+                    padding: "0.2rem 0.5rem",
+                    borderRadius: "var(--radius-sm)"
+                  }}
+                >
+                  View Fullscreen
+                </a>
+              </div>
+              <img
+                src={diagramUrl}
+                alt="AI Generated Diagram"
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "450px",
+                  objectFit: "contain",
+                  background: "#131622",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "1rem"
+                }}
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                  const nextSib = e.currentTarget.nextElementSibling as HTMLElement;
+                  if (nextSib) nextSib.style.display = "block";
+                }}
+              />
+              <div style={{ display: "none", color: "var(--color-danger)", fontSize: "0.8rem", textAlign: "center", width: "100%" }}>
+                Failed to render diagram. Raw syntax:
+                <pre style={{ textAlign: "left", fontSize: "0.75rem", background: "rgba(0,0,0,0.2)", padding: "0.5rem", borderRadius: "4px", marginTop: "0.5rem", whiteSpace: "pre-wrap" }}>
+                  {block.content}
+                </pre>
+              </div>
+            </div>
           );
         }
-        if (trimmed.startsWith("## ")) {
+
+        if (block.type === "image") {
           return (
-            <h3 key={idx} style={{ margin: "1rem 0 0.5rem 0", color: "#fff", fontWeight: 700, fontSize: "1.1rem" }}>
-              {parseInline(trimmed.substring(3))}
-            </h3>
+            <div
+              key={`image-${idx}`}
+              className="glass-panel"
+              style={{
+                padding: "1.25rem",
+                borderRadius: "var(--radius-md)",
+                background: "rgba(19, 22, 34, 0.4)",
+                border: "var(--border-glass)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "0.75rem",
+                margin: "0.5rem 0",
+                width: "100%"
+              }}
+            >
+              <div style={{ width: "100%", borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                <Sparkles size={12} color="var(--color-accent-purple)" />
+                <span style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)", fontWeight: 600 }}>AI Generated Illustration</span>
+              </div>
+              <img
+                src={block.url}
+                alt={block.alt || "AI generated visualization"}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "450px",
+                  borderRadius: "var(--radius-sm)",
+                  objectFit: "contain",
+                  boxShadow: "var(--shadow-md)"
+                }}
+              />
+              {block.alt && (
+                <span style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)", fontStyle: "italic", textAlign: "center" }}>
+                  {block.alt}
+                </span>
+              )}
+            </div>
           );
         }
-        if (trimmed.startsWith("# ")) {
+
+        if (block.type === "code") {
           return (
-            <h2 key={idx} style={{ margin: "1.2rem 0 0.6rem 0", color: "#fff", fontWeight: 700, fontSize: "1.25rem" }}>
-              {parseInline(trimmed.substring(2))}
-            </h2>
+            <pre
+              key={`code-${idx}`}
+              style={{
+                background: "rgba(10, 12, 22, 0.75)",
+                border: "var(--border-glass)",
+                padding: "1rem",
+                borderRadius: "var(--radius-md)",
+                overflowX: "auto",
+                fontSize: "0.8rem",
+                fontFamily: "monospace",
+                color: "#e2e8f0",
+                margin: "0.5rem 0",
+                width: "100%"
+              }}
+            >
+              <code>{block.content}</code>
+            </pre>
           );
         }
-        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-          return (
-            <li key={idx} style={{ marginLeft: "1.2rem", marginBottom: "0.2rem", listStyleType: "disc" }}>
-              {parseInline(trimmed.substring(2))}
-            </li>
-          );
-        }
-        const numMatch = trimmed.match(/^(\d+)\.\s(.*)/);
-        if (numMatch) {
-          return (
-            <li key={idx} style={{ marginLeft: "1.2rem", marginBottom: "0.2rem", listStyleType: "decimal" }}>
-              {parseInline(numMatch[2])}
-            </li>
-          );
-        }
-        if (trimmed === "") {
-          return <div key={idx} style={{ height: "0.3rem" }} />;
-        }
-        return (
-          <p key={idx} style={{ margin: 0, lineHeight: "1.5" }}>
-            {parseInline(line)}
-          </p>
-        );
+
+        return null;
       })}
     </div>
   );
@@ -579,6 +830,12 @@ export default function App() {
         })
       });
 
+      if (res.status === 401) {
+        alert("Your session has expired. Please log in again.");
+        handleLogout();
+        return;
+      }
+
       const data = await res.json();
       if (res.ok) {
         setChatHistory((prev) => [
@@ -623,6 +880,10 @@ export default function App() {
     } catch (err) {
       console.error("Clear history error:", err);
     }
+  };
+
+  const handleDownloadPDF = (docId: number, filename: string) => {
+    window.open(`${API_BASE}/documents/${docId}/download?token=${encodeURIComponent(token || "")}`, "_blank");
   };
 
   const handleSaveRename = async (sessionId: number) => {
@@ -745,14 +1006,18 @@ export default function App() {
                   display: "flex",
                   alignItems: "center",
                   gap: "0.5rem",
-                  color: "var(--color-danger)",
+                  color: authError.toLowerCase().includes("successful") ? "var(--color-success)" : "var(--color-danger)",
                   fontSize: "0.85rem",
-                  background: "rgba(239, 68, 68, 0.1)",
+                  background: authError.toLowerCase().includes("successful") ? "rgba(16, 185, 129, 0.1)" : "rgba(239, 68, 68, 0.1)",
                   padding: "0.6rem 0.8rem",
                   borderRadius: "var(--radius-md)"
                 }}
               >
-                <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                {authError.toLowerCase().includes("successful") ? (
+                  <Sparkles size={16} style={{ flexShrink: 0 }} />
+                ) : (
+                  <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                )}
                 <span>{authError}</span>
               </div>
             )}
@@ -1347,25 +1612,23 @@ export default function App() {
                                 >
                                   <Share2 size={12} />
                                 </button>
-                                {session.user_id === user?.id && (
-                                  <button
-                                    onClick={(e) => handleDeleteSession(session.id, e)}
-                                    style={{
-                                      background: "transparent",
-                                      color: "var(--color-text-muted)",
-                                      border: "none",
-                                      padding: "0.15rem",
-                                      cursor: "pointer",
-                                      display: "flex",
-                                      alignItems: "center"
-                                    }}
-                                    onMouseOver={(e) => e.currentTarget.style.color = "var(--color-danger)"}
-                                    onMouseOut={(e) => e.currentTarget.style.color = "var(--color-text-muted)"}
-                                    title="Delete Chat"
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
-                                )}
+                                <button
+                                  onClick={(e) => handleDeleteSession(session.id, e)}
+                                  style={{
+                                    background: "transparent",
+                                    color: "var(--color-text-muted)",
+                                    border: "none",
+                                    padding: "0.15rem",
+                                    cursor: "pointer",
+                                    display: "flex",
+                                    alignItems: "center"
+                                  }}
+                                  onMouseOver={(e) => e.currentTarget.style.color = "var(--color-danger)"}
+                                  onMouseOut={(e) => e.currentTarget.style.color = "var(--color-text-muted)"}
+                                  title={session.user_id === user?.id ? "Delete Chat" : "Leave Chat"}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
                               </div>
                             </div>
                           );
@@ -1446,55 +1709,101 @@ export default function App() {
                             <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%" }}>
                               <RefreshCw size={24} color="var(--color-accent-indigo)" style={{ animation: "skeleton-shimmer 1.5s infinite" }} />
                             </div>
-                          ) : chatHistory.length === 0 ? (
-                            null
                           ) : (
-                            chatHistory.map((msg) => {
-                              const isUser = msg.role === "user";
-                              return (
+                            <>
+                              {selectedSessionId && (() => {
+                                const session = chatSessions.find((s) => s.id === selectedSessionId);
+                                return session && session.user_id !== user?.id && activeDoc;
+                              })() && (
                                 <div
-                                  key={msg.id}
+                                  className="glass-panel"
                                   style={{
                                     display: "flex",
-                                    justifyContent: isUser ? "flex-end" : "flex-start",
-                                    width: "100%"
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    padding: "1rem 1.25rem",
+                                    borderRadius: "var(--radius-md)",
+                                    background: "rgba(99, 102, 241, 0.04)",
+                                    border: "1px dashed rgba(99, 102, 241, 0.3)",
+                                    marginBottom: "0.5rem",
+                                    flexShrink: 0
                                   }}
                                 >
-                                  <div
-                                    className="glass-panel"
-                                    style={{
-                                      maxWidth: "75%",
-                                      padding: "1rem 1.25rem",
-                                      borderRadius: isUser ? "16px 16px 2px 16px" : "16px 16px 16px 2px",
-                                      background: isUser ? "var(--gradient-primary)" : "rgba(30, 35, 50, 0.55)",
-                                      border: isUser ? "none" : "var(--border-glass)",
-                                      boxShadow: isUser ? "var(--shadow-glow-indigo)" : "var(--shadow-sm)"
-                                    }}
-                                  >
-                                    <div
-                                      style={{
-                                        fontSize: "0.9rem",
-                                        lineHeight: "1.5",
-                                        color: isUser ? "#fff" : "var(--color-text-primary)",
-                                        whiteSpace: isUser ? "pre-wrap" : undefined
-                                      }}
-                                    >
-                                      {isUser ? msg.content : formatMessageContent(msg.content)}
-                                    </div>
-                                    <div
-                                      style={{
-                                        fontSize: "0.7rem",
-                                        color: isUser ? "rgba(255,255,255,0.7)" : "var(--color-text-muted)",
-                                        textAlign: "right",
-                                        marginTop: "0.4rem"
-                                      }}
-                                    >
-                                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                                    <FileText size={20} color="var(--color-accent-indigo)" />
+                                    <div>
+                                      <div style={{ fontSize: "0.85rem", color: "#fff", fontWeight: 600 }}>Reference Notes</div>
+                                      <div style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "250px" }}>
+                                        {activeDoc.filename}
+                                      </div>
                                     </div>
                                   </div>
+                                  <button
+                                    onClick={() => handleDownloadPDF(activeDoc.id, activeDoc.filename)}
+                                    className="btn-primary"
+                                    style={{
+                                      fontSize: "0.75rem",
+                                      padding: "0.4rem 0.8rem",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "0.3rem"
+                                    }}
+                                  >
+                                    <UploadCloud size={14} style={{ transform: "rotate(180deg)" }} />
+                                    <span>Download PDF</span>
+                                  </button>
                                 </div>
-                              );
-                            })
+                              )}
+
+                              {chatHistory.length === 0 ? null : (
+                                chatHistory.map((msg) => {
+                                  const isUser = msg.role === "user";
+                                  return (
+                                    <div
+                                      key={msg.id}
+                                      style={{
+                                        display: "flex",
+                                        justifyContent: isUser ? "flex-end" : "flex-start",
+                                        width: "100%"
+                                      }}
+                                    >
+                                      <div
+                                        className="glass-panel"
+                                        style={{
+                                          maxWidth: "75%",
+                                          padding: "1rem 1.25rem",
+                                          borderRadius: isUser ? "16px 16px 2px 16px" : "16px 16px 16px 2px",
+                                          background: isUser ? "var(--gradient-primary)" : "rgba(30, 35, 50, 0.55)",
+                                          border: isUser ? "none" : "var(--border-glass)",
+                                          boxShadow: isUser ? "var(--shadow-glow-indigo)" : "var(--shadow-sm)"
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            fontSize: "0.9rem",
+                                            lineHeight: "1.5",
+                                            color: isUser ? "#fff" : "var(--color-text-primary)",
+                                            whiteSpace: isUser ? "pre-wrap" : undefined
+                                          }}
+                                        >
+                                          {isUser ? msg.content : formatMessageContent(msg.content)}
+                                        </div>
+                                        <div
+                                          style={{
+                                            fontSize: "0.7rem",
+                                            color: isUser ? "rgba(255,255,255,0.7)" : "var(--color-text-muted)",
+                                            textAlign: "right",
+                                            marginTop: "0.4rem"
+                                          }}
+                                        >
+                                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </>
                           )}
 
                           {sendingMessage && (

@@ -165,19 +165,34 @@ def delete_chat_session(session_id: int, db: Session, current_user: User) -> dic
         dict - A confirmation message.
     """
     session = db.query(ChatSession).filter(
-        ChatSession.id == session_id,
-        ChatSession.user_id == current_user.id
+        ChatSession.id == session_id
     ).first()
 
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat session not found or access denied"
+            detail="Chat session not found"
         )
 
-    db.delete(session)
-    db.commit()
-    return {"message": "Chat session deleted successfully."}
+    is_owner = session.user_id == current_user.id
+    if is_owner:
+        db.delete(session)
+        db.commit()
+        return {"message": "Chat session deleted successfully."}
+    else:
+        collab = db.query(ChatSessionCollaborator).filter(
+            ChatSessionCollaborator.session_id == session_id,
+            ChatSessionCollaborator.user_id == current_user.id
+        ).first()
+        if collab:
+            db.delete(collab)
+            db.commit()
+            return {"message": "Left the collaborative session."}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied to this chat session"
+            )
 
 
 def generate_share_code(session_id: int, db: Session, current_user: User) -> ChatSession:
