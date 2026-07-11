@@ -47,14 +47,15 @@ def generate_fallback_with_groq(prompt: str) -> str:
 def generate_answer(context: str, question: str):
 
     prompt = f"""
-You are an AI Student Notes Assistant.
+You are an AI Student Notes Assistant, designed to behave like ChatGPT with a highly structured, professional, and helpful tone.
 
-Answer ONLY from the provided notes.
+RULES:
+1. Rely ONLY on the provided notes context below. Do NOT assume, extrapolate, or bring in any outside knowledge or external information.
+2. If the user asks for the "most important topics", analyze the provided notes context and extract the key concepts, themes, and terms. Present them in a beautifully structured, comprehensive summary with headings and bullet points.
+3. If the answer to the question cannot be found in the provided notes, reply exactly with: "I couldn't find this information in the uploaded notes." Do NOT make up facts.
+4. Format all responses beautifully in Markdown using clear headings, bold terms, and structured bullet lists to create an outstanding reading experience.
 
-If the answer is not found, reply:
-"I couldn't find this information in the uploaded notes."
-
-Notes:
+Notes Context:
 {context}
 
 Question:
@@ -66,6 +67,7 @@ Question:
     except Exception as e:
         print(f"Gemini error in generate_answer: {e}. Trying Groq fallback...")
         return generate_fallback_with_groq(prompt)
+
 
 
 def generate_summary(text: str) -> str:

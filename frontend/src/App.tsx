@@ -17,6 +17,84 @@ import {
 
 const API_BASE = "http://localhost:8000";
 
+function formatMessageContent(content: string): React.ReactNode {
+  if (!content) return null;
+  const lines = content.split("\n");
+  
+  const parseInline = (text: string): React.ReactNode => {
+    const parts: React.ReactNode[] = [];
+    const regex = /\*\*([\s\S]*?)\*\*/g;
+    let lastIndex = 0;
+    let match;
+    let keyIdx = 0;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(text.substring(lastIndex, match.index));
+      }
+      parts.push(<strong key={`bold-${match.index}-${keyIdx++}`}>{match[1]}</strong>);
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      parts.push(text.substring(lastIndex));
+    }
+    return parts.length > 0 ? <>{parts}</> : text;
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        
+        if (trimmed.startsWith("### ")) {
+          return (
+            <h4 key={idx} style={{ margin: "0.8rem 0 0.4rem 0", color: "#fff", fontWeight: 600, fontSize: "0.95rem" }}>
+              {parseInline(trimmed.substring(4))}
+            </h4>
+          );
+        }
+        if (trimmed.startsWith("## ")) {
+          return (
+            <h3 key={idx} style={{ margin: "1rem 0 0.5rem 0", color: "#fff", fontWeight: 700, fontSize: "1.1rem" }}>
+              {parseInline(trimmed.substring(3))}
+            </h3>
+          );
+        }
+        if (trimmed.startsWith("# ")) {
+          return (
+            <h2 key={idx} style={{ margin: "1.2rem 0 0.6rem 0", color: "#fff", fontWeight: 700, fontSize: "1.25rem" }}>
+              {parseInline(trimmed.substring(2))}
+            </h2>
+          );
+        }
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+          return (
+            <li key={idx} style={{ marginLeft: "1.2rem", marginBottom: "0.2rem", listStyleType: "disc" }}>
+              {parseInline(trimmed.substring(2))}
+            </li>
+          );
+        }
+        const numMatch = trimmed.match(/^(\d+)\.\s(.*)/);
+        if (numMatch) {
+          return (
+            <li key={idx} style={{ marginLeft: "1.2rem", marginBottom: "0.2rem", listStyleType: "decimal" }}>
+              {parseInline(numMatch[2])}
+            </li>
+          );
+        }
+        if (trimmed === "") {
+          return <div key={idx} style={{ height: "0.3rem" }} />;
+        }
+        return (
+          <p key={idx} style={{ margin: 0, lineHeight: "1.5" }}>
+            {parseInline(line)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+
 interface Document {
   id: number;
   filename: string;
@@ -916,8 +994,8 @@ export default function App() {
                       <h3 style={{ fontSize: "1.3rem", color: "#fff" }}>AI Summary Notes</h3>
                     </div>
                     {activeDoc.summary ? (
-                      <div className="summary-markdown" style={{ whiteSpace: "pre-wrap" }}>
-                        {activeDoc.summary}
+                      <div className="summary-markdown">
+                        {formatMessageContent(activeDoc.summary)}
                       </div>
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", padding: "3rem 1rem" }}>
@@ -1032,10 +1110,10 @@ export default function App() {
                                   fontSize: "0.9rem",
                                   lineHeight: "1.5",
                                   color: isUser ? "#fff" : "var(--color-text-primary)",
-                                  whiteSpace: "pre-wrap"
+                                  whiteSpace: isUser ? "pre-wrap" : undefined
                                 }}
                               >
-                                {msg.content}
+                                {isUser ? msg.content : formatMessageContent(msg.content)}
                               </div>
                               <div
                                 style={{
