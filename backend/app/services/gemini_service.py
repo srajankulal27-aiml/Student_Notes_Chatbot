@@ -12,6 +12,9 @@ def generate_fallback_with_groq(prompt: str) -> str:
     """
     Call Groq API as a fallback when Gemini is rate limited / quota exceeded.
     """
+    from dotenv import load_dotenv
+    load_dotenv()
+    
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key:
         return "Failed to generate response: API quota exceeded."
