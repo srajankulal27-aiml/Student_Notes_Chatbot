@@ -69,6 +69,52 @@ def create_session(
 
 
 # -----------------------------
+# Rename Chat Session
+# -----------------------------
+from pydantic import BaseModel
+
+class RenameSessionRequest(BaseModel):
+    title: str
+
+@router.put("/session/{session_id}", response_model=ChatSessionResponse)
+def rename_session(
+    session_id: int,
+    request: RenameSessionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat session not found"
+        )
+
+    is_owner = session.user_id == current_user.id
+    is_collaborator = db.query(ChatSessionCollaborator).filter(
+        ChatSessionCollaborator.session_id == session.id,
+        ChatSessionCollaborator.user_id == current_user.id
+    ).first() is not None
+
+    if not is_owner and not is_collaborator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this chat session"
+        )
+
+    if not request.title.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Title cannot be empty"
+        )
+
+    session.title = request.title.strip()
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+# -----------------------------
 # List Chat Sessions
 # -----------------------------
 @router.get("/sessions/{document_id}", response_model=List[ChatSessionResponse])

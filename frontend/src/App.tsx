@@ -12,7 +12,9 @@ import {
   AlertCircle,
   FileText,
   HelpCircle,
-  History
+  History,
+  Share2,
+  Edit2
 } from "lucide-react";
 
 const API_BASE = "http://localhost:8000";
@@ -110,6 +112,15 @@ interface ChatMessage {
   timestamp: string;
 }
 
+interface ChatSession {
+  id: number;
+  title: string;
+  created_at: string;
+  document_id: number;
+  user_id: number;
+  share_code: string | null;
+}
+
 interface SearchResult {
   id: number;
   chunk_index: number;
@@ -150,6 +161,16 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [isSharingModalOpen, setIsSharingModalOpen] = useState(false);
+  const [sharingSessionCode, setSharingSessionCode] = useState<string | null>(null);
+  const [pendingShareCode, setPendingShareCode] = useState<string | null>(
+    new URLSearchParams(window.location.search).get("share")
+  );
+  const [renamingSessionId, setRenamingSessionId] = useState<number | null>(null);
+  const [renameTitleInput, setRenameTitleInput] = useState("");
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -215,22 +236,99 @@ export default function App() {
     }
   }, [chatHistory, sendingMessage]);
 
-  // Load chat history when selected document changes
+  // Fetch sessions and reset tabs on doc change
   useEffect(() => {
     if (selectedDocId && token) {
-      fetchChatHistory(selectedDocId);
-      // Reset tab and searches
+      fetchChatSessions(selectedDocId);
       setActiveTab("summary");
       setSearchQuery("");
       setSearchResults([]);
+    } else {
+      setChatSessions([]);
+      setSelectedSessionId(null);
     }
   }, [selectedDocId]);
 
-  // Fetch chat history for selected document
-  const fetchChatHistory = async (docId: number) => {
+  // Load chat history when selected session changes
+  useEffect(() => {
+    if (selectedSessionId && token) {
+      fetchChatHistory(selectedSessionId);
+    } else {
+      setChatHistory([]);
+    }
+  }, [selectedSessionId]);
+
+  // Handle URL share code on login / page load
+  useEffect(() => {
+    const handlePendingShare = async () => {
+      if (token && pendingShareCode) {
+        try {
+          const joinRes = await fetch(`${API_BASE}/chat/session/join/${pendingShareCode}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          
+          if (joinRes.ok) {
+            const joinData = await joinRes.json();
+            const sessionId = joinData.session_id;
+            
+            const detailsRes = await fetch(`${API_BASE}/chat/session/share/${pendingShareCode}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            
+            if (detailsRes.ok) {
+              const sessionDetails = await detailsRes.json();
+              
+              await fetchDocuments();
+              
+              setPendingShareCode(null);
+              window.history.replaceState({}, document.title, window.location.pathname);
+              
+              setSelectedDocId(sessionDetails.document_id);
+              setSelectedSessionId(sessionId);
+              setActiveTab("chat");
+            }
+          }
+        } catch (err) {
+          console.error("Pending share error:", err);
+        }
+      }
+    };
+    handlePendingShare();
+  }, [token, pendingShareCode]);
+
+  // Fetch chat sessions for a document
+  const fetchChatSessions = async (docId: number) => {
+    if (!token) return;
+    setSessionsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/chat/sessions/${docId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChatSessions(data);
+        if (data.length > 0) {
+          const stillExists = data.some((s: ChatSession) => s.id === selectedSessionId);
+          if (!stillExists) {
+            setSelectedSessionId(data[0].id);
+          }
+        } else {
+          setSelectedSessionId(null);
+        }
+      }
+    } catch (err) {
+      console.error("Sessions fetch error:", err);
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  // Fetch chat history for selected session
+  const fetchChatHistory = async (sessionId: number) => {
     setChatLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/chat/history/${docId}`, {
+      const res = await fetch(`${API_BASE}/chat/history/${sessionId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
@@ -386,9 +484,74 @@ export default function App() {
   };
 
   // Chat actions
+  // Chat actions
+  const handleCreateSession = async (title?: string) => {
+    if (!selectedDocId || !token) return;
+    try {
+      const res = await fetch(`${API_BASE}/chat/session`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          document_id: selectedDocId,
+          title: title || `Chat Session ${chatSessions.length + 1}`
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChatSessions((prev) => [data, ...prev]);
+        setSelectedSessionId(data.id);
+        setActiveTab("chat");
+      }
+    } catch (err) {
+      console.error("Create session error:", err);
+    }
+  };
+
+  const handleDeleteSession = async (sessionId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Are you sure you want to delete this chat session?")) return;
+    try {
+      const res = await fetch(`${API_BASE}/chat/session/${sessionId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setChatSessions((prev) => prev.filter((s) => s.id !== sessionId));
+        if (selectedSessionId === sessionId) {
+          setSelectedSessionId(null);
+        }
+      }
+    } catch (err) {
+      console.error("Delete session error:", err);
+    }
+  };
+
+  const handleShareSession = async (sessionId: number) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/chat/session/${sessionId}/share`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChatSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, share_code: data.share_code } : s))
+        );
+        setSharingSessionCode(data.share_code);
+        setIsSharingModalOpen(true);
+      }
+    } catch (err) {
+      console.error("Share session error:", err);
+    }
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || !selectedDocId || sendingMessage) return;
+    if (!chatInput.trim() || !selectedSessionId || sendingMessage) return;
 
     const userMsgContent = chatInput.trim();
     setChatInput("");
@@ -412,7 +575,7 @@ export default function App() {
         },
         body: JSON.stringify({
           question: userMsgContent,
-          document_id: selectedDocId
+          session_id: selectedSessionId
         })
       });
 
@@ -445,13 +608,12 @@ export default function App() {
     }
   };
 
-  // Clear chat history
   const handleClearHistory = async () => {
-    if (!selectedDocId) return;
-    if (!confirm("Clear your conversation history for these notes?")) return;
+    if (!selectedSessionId) return;
+    if (!confirm("Clear your conversation history for this session?")) return;
 
     try {
-      const res = await fetch(`${API_BASE}/chat/history/${selectedDocId}`, {
+      const res = await fetch(`${API_BASE}/chat/history/${selectedSessionId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -460,6 +622,33 @@ export default function App() {
       }
     } catch (err) {
       console.error("Clear history error:", err);
+    }
+  };
+
+  const handleSaveRename = async (sessionId: number) => {
+    if (!renameTitleInput.trim() || !token) {
+      setRenamingSessionId(null);
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/chat/session/${sessionId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ title: renameTitleInput.trim() })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setChatSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, title: updated.title } : s))
+        );
+      }
+    } catch (err) {
+      console.error("Rename session error:", err);
+    } finally {
+      setRenamingSessionId(null);
     }
   };
 
@@ -1011,184 +1200,387 @@ export default function App() {
 
               {/* CHAT TAB */}
               {activeTab === "chat" && (
-                <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}>
-                  {/* Messages container */}
-                  <div style={{ flexGrow: 1, overflowY: "auto", padding: "2rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-                    
-                    {/* Header bar controls */}
-                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.5rem" }}>
-                      <button
-                        onClick={handleClearHistory}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "0.4rem",
-                          fontSize: "0.75rem",
-                          color: "var(--color-text-secondary)",
-                          background: "rgba(255,255,255,0.03)",
-                          border: "var(--border-glass)",
-                          padding: "0.4rem 0.8rem",
-                          borderRadius: "var(--radius-md)"
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.color = "#fff"}
-                        onMouseOut={(e) => e.currentTarget.style.color = "var(--color-text-secondary)"}
-                      >
-                        <History size={12} />
-                        <span>Clear History</span>
-                      </button>
-                    </div>
-
-                    {chatLoading ? (
-                      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%" }}>
-                        <RefreshCw size={24} color="var(--color-accent-indigo)" style={{ animation: "skeleton-shimmer 1.5s infinite" }} />
-                      </div>
-                    ) : chatHistory.length === 0 ? (
-                      <div style={{ margin: "auto", maxWidth: "480px", textAlign: "center", padding: "2rem" }}>
-                        <HelpCircle size={40} color="var(--color-text-muted)" style={{ marginBottom: "1rem" }} />
-                        <h4 style={{ color: "#fff", marginBottom: "0.5rem" }}>Start Studying with Gemini RAG</h4>
-                        <p style={{ color: "var(--color-text-secondary)", fontSize: "0.85rem", marginBottom: "1.5rem" }}>
-                          Ask specific queries, explain complex terminology, or ask it to generate study quizzes.
-                        </p>
-                        {/* Quick Prompts */}
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
-                          {[
-                            "What are the most crucial takeaways here?",
-                            "Can you write a 3-question quiz from these notes?",
-                            "Explain the core terms clearly."
-                          ].map((prompt, i) => (
-                            <div
-                              key={i}
-                              onClick={() => setChatInput(prompt)}
-                              style={{
-                                background: "rgba(255,255,255,0.02)",
-                                border: "var(--border-glass)",
-                                padding: "0.5rem 0.75rem",
-                                borderRadius: "var(--radius-md)",
-                                cursor: "pointer",
-                                fontSize: "0.75rem",
-                                color: "var(--color-text-secondary)"
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.borderColor = "var(--color-accent-indigo)";
-                                e.currentTarget.style.color = "#fff";
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
-                                e.currentTarget.style.color = "var(--color-text-secondary)";
-                              }}
-                            >
-                              {prompt}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      chatHistory.map((msg) => {
-                        const isUser = msg.role === "user";
-                        return (
-                          <div
-                            key={msg.id}
-                            style={{
-                              display: "flex",
-                              justifyContent: isUser ? "flex-end" : "flex-start",
-                              width: "100%"
-                            }}
-                          >
-                            <div
-                              className="glass-panel"
-                              style={{
-                                maxWidth: "75%",
-                                padding: "1rem 1.25rem",
-                                borderRadius: isUser ? "16px 16px 2px 16px" : "16px 16px 16px 2px",
-                                background: isUser ? "var(--gradient-primary)" : "rgba(30, 35, 50, 0.55)",
-                                border: isUser ? "none" : "var(--border-glass)",
-                                boxShadow: isUser ? "var(--shadow-glow-indigo)" : "var(--shadow-sm)"
-                              }}
-                            >
-                              <div
-                                style={{
-                                  fontSize: "0.9rem",
-                                  lineHeight: "1.5",
-                                  color: isUser ? "#fff" : "var(--color-text-primary)",
-                                  whiteSpace: isUser ? "pre-wrap" : undefined
-                                }}
-                              >
-                                {isUser ? msg.content : formatMessageContent(msg.content)}
-                              </div>
-                              <div
-                                style={{
-                                  fontSize: "0.7rem",
-                                  color: isUser ? "rgba(255,255,255,0.7)" : "var(--color-text-muted)",
-                                  textAlign: "right",
-                                  marginTop: "0.4rem"
-                                }}
-                              >
-                                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-
-                    {sendingMessage && (
-                      <div style={{ display: "flex", justifyContent: "flex-start", width: "100%" }}>
-                        <div
-                          className="glass-panel"
-                          style={{
-                            padding: "1rem 1.25rem",
-                            borderRadius: "16px 16px 16px 2px",
-                            background: "rgba(30, 35, 50, 0.55)",
-                            border: "var(--border-glass)"
-                          }}
-                        >
-                          <div className="typing-indicator">
-                            <span className="typing-dot" />
-                            <span className="typing-dot" />
-                            <span className="typing-dot" />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    <div ref={chatBottomRef} />
-                  </div>
-
-                  {/* Message Input box */}
-                  <form
-                    onSubmit={handleSendMessage}
+                <div style={{ display: "flex", height: "100%", width: "100%", overflow: "hidden" }}>
+                  {/* Left Chat sessions list sidebar */}
+                  <div
                     style={{
-                      padding: "1.5rem 2rem",
-                      borderTop: "var(--border-glass)",
+                      width: "240px",
                       background: "rgba(10, 12, 22, 0.4)",
+                      borderRight: "var(--border-glass)",
                       display: "flex",
-                      gap: "0.75rem",
-                      alignItems: "center"
+                      flexDirection: "column",
+                      padding: "1.25rem 1rem",
+                      flexShrink: 0,
+                      height: "100%",
+                      overflowY: "auto"
                     }}
                   >
-                    <input
-                      type="text"
-                      placeholder="Ask a question about these notes..."
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      style={{ flexGrow: 1 }}
-                      disabled={sendingMessage}
-                    />
                     <button
-                      type="submit"
+                      onClick={() => handleCreateSession()}
                       className="btn-primary"
                       style={{
-                        padding: "0.75rem",
-                        borderRadius: "var(--radius-md)",
+                        marginBottom: "1rem",
+                        fontSize: "0.85rem",
+                        padding: "0.6rem 0.8rem",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        flexShrink: 0
+                        gap: "0.5rem",
+                        width: "100%"
                       }}
-                      disabled={!chatInput.trim() || sendingMessage}
                     >
-                      <Send size={18} />
+                      <Sparkles size={14} />
+                      <span>New Chat</span>
                     </button>
-                  </form>
+
+                    <div style={{ flexGrow: 1, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                      {sessionsLoading ? (
+                        <div style={{ display: "flex", justifyContent: "center", padding: "1.5rem 0" }}>
+                          <RefreshCw size={18} color="var(--color-accent-indigo)" style={{ animation: "skeleton-shimmer 1.5s infinite" }} />
+                        </div>
+                      ) : chatSessions.length === 0 ? (
+                        <div style={{ textAlign: "center", color: "var(--color-text-muted)", fontSize: "0.75rem", padding: "1.5rem 0" }}>
+                          No active chats. Start one now!
+                        </div>
+                      ) : (
+                        chatSessions.map((session) => {
+                          const isSelected = session.id === selectedSessionId;
+                          return (
+                            <div
+                              key={session.id}
+                              onClick={() => setSelectedSessionId(session.id)}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                padding: "0.6rem 0.8rem",
+                                borderRadius: "var(--radius-md)",
+                                background: isSelected ? "rgba(99, 102, 241, 0.15)" : "transparent",
+                                border: isSelected ? "1px solid rgba(99, 102, 241, 0.3)" : "1px solid transparent",
+                                cursor: "pointer",
+                                transition: "all var(--transition-fast)"
+                              }}
+                              onMouseOver={(e) => {
+                                if (!isSelected) e.currentTarget.style.background = "rgba(255,255,255,0.03)";
+                              }}
+                              onMouseOut={(e) => {
+                                if (!isSelected) e.currentTarget.style.background = "transparent";
+                              }}
+                            >
+                              {renamingSessionId === session.id ? (
+                                <input
+                                  type="text"
+                                  value={renameTitleInput}
+                                  onChange={(e) => setRenameTitleInput(e.target.value)}
+                                  onBlur={() => handleSaveRename(session.id)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") handleSaveRename(session.id);
+                                    if (e.key === "Escape") setRenamingSessionId(null);
+                                  }}
+                                  autoFocus
+                                  style={{
+                                    fontSize: "0.8rem",
+                                    padding: "2px 4px",
+                                    width: "120px",
+                                    background: "rgba(255, 255, 255, 0.05)",
+                                    border: "1px solid var(--color-accent-indigo)",
+                                    color: "#fff",
+                                    borderRadius: "4px"
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : (
+                                <span
+                                  style={{
+                                    fontSize: "0.8rem",
+                                    color: isSelected ? "#fff" : "var(--color-text-secondary)",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                    maxWidth: "110px",
+                                    fontWeight: isSelected ? 500 : 400
+                                  }}
+                                >
+                                  {session.title}
+                                </span>
+                              )}
+                              
+                              <div style={{ display: "flex", gap: "0.2rem", alignItems: "center" }}>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRenamingSessionId(session.id);
+                                    setRenameTitleInput(session.title);
+                                  }}
+                                  style={{
+                                    background: "transparent",
+                                    color: "var(--color-text-muted)",
+                                    border: "none",
+                                    padding: "0.15rem",
+                                    cursor: "pointer",
+                                    display: "flex",
+                                    alignItems: "center"
+                                  }}
+                                  onMouseOver={(e) => e.currentTarget.style.color = "var(--color-accent-indigo)"}
+                                  onMouseOut={(e) => e.currentTarget.style.color = "var(--color-text-muted)"}
+                                  title="Rename Chat"
+                                >
+                                  <Edit2 size={12} />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleShareSession(session.id);
+                                  }}
+                                  style={{
+                                    background: "transparent",
+                                    color: "var(--color-text-muted)",
+                                    border: "none",
+                                    padding: "0.15rem",
+                                    cursor: "pointer",
+                                    display: "flex",
+                                    alignItems: "center"
+                                  }}
+                                  onMouseOver={(e) => e.currentTarget.style.color = "var(--color-accent-indigo)"}
+                                  onMouseOut={(e) => e.currentTarget.style.color = "var(--color-text-muted)"}
+                                  title="Share Chat"
+                                >
+                                  <Share2 size={12} />
+                                </button>
+                                {session.user_id === user?.id && (
+                                  <button
+                                    onClick={(e) => handleDeleteSession(session.id, e)}
+                                    style={{
+                                      background: "transparent",
+                                      color: "var(--color-text-muted)",
+                                      border: "none",
+                                      padding: "0.15rem",
+                                      cursor: "pointer",
+                                      display: "flex",
+                                      alignItems: "center"
+                                    }}
+                                    onMouseOver={(e) => e.currentTarget.style.color = "var(--color-danger)"}
+                                    onMouseOut={(e) => e.currentTarget.style.color = "var(--color-text-muted)"}
+                                    title="Delete Chat"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right Chat details pane */}
+                  <div style={{ flexGrow: 1, display: "flex", flexDirection: "column", height: "100%", minWidth: 0 }}>
+                    {selectedSessionId ? (
+                      <>
+                        {/* Selected Session Header */}
+                        <div
+                          style={{
+                            padding: "0.75rem 1.5rem",
+                            borderBottom: "var(--border-glass)",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            background: "rgba(10, 12, 22, 0.2)",
+                            flexShrink: 0
+                          }}
+                        >
+                          <span style={{ fontSize: "0.85rem", color: "#fff", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {chatSessions.find((s) => s.id === selectedSessionId)?.title || "Conversing..."}
+                          </span>
+                          
+                          <div style={{ display: "flex", gap: "0.5rem" }}>
+                            <button
+                              onClick={() => handleShareSession(selectedSessionId)}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "0.3rem",
+                                fontSize: "0.75rem",
+                                color: "var(--color-text-secondary)",
+                                background: "rgba(255,255,255,0.03)",
+                                border: "var(--border-glass)",
+                                padding: "0.4rem 0.8rem",
+                                borderRadius: "var(--radius-md)",
+                                cursor: "pointer"
+                              }}
+                              onMouseOver={(e) => e.currentTarget.style.color = "#fff"}
+                              onMouseOut={(e) => e.currentTarget.style.color = "var(--color-text-secondary)"}
+                            >
+                              <Share2 size={12} />
+                              <span>Share Link</span>
+                            </button>
+                            {chatSessions.find((s) => s.id === selectedSessionId)?.user_id === user?.id && (
+                              <button
+                                onClick={handleClearHistory}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "0.4rem",
+                                  fontSize: "0.75rem",
+                                  color: "var(--color-text-secondary)",
+                                  background: "rgba(255,255,255,0.03)",
+                                  border: "var(--border-glass)",
+                                  padding: "0.4rem 0.8rem",
+                                  borderRadius: "var(--radius-md)",
+                                  cursor: "pointer"
+                                }}
+                                onMouseOver={(e) => e.currentTarget.style.color = "#fff"}
+                                onMouseOut={(e) => e.currentTarget.style.color = "var(--color-text-secondary)"}
+                              >
+                                <History size={12} />
+                                <span>Clear History</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Messages Area */}
+                        <div style={{ flexGrow: 1, overflowY: "auto", padding: "1.5rem 2rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+                          {chatLoading ? (
+                            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%" }}>
+                              <RefreshCw size={24} color="var(--color-accent-indigo)" style={{ animation: "skeleton-shimmer 1.5s infinite" }} />
+                            </div>
+                          ) : chatHistory.length === 0 ? (
+                            null
+                          ) : (
+                            chatHistory.map((msg) => {
+                              const isUser = msg.role === "user";
+                              return (
+                                <div
+                                  key={msg.id}
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: isUser ? "flex-end" : "flex-start",
+                                    width: "100%"
+                                  }}
+                                >
+                                  <div
+                                    className="glass-panel"
+                                    style={{
+                                      maxWidth: "75%",
+                                      padding: "1rem 1.25rem",
+                                      borderRadius: isUser ? "16px 16px 2px 16px" : "16px 16px 16px 2px",
+                                      background: isUser ? "var(--gradient-primary)" : "rgba(30, 35, 50, 0.55)",
+                                      border: isUser ? "none" : "var(--border-glass)",
+                                      boxShadow: isUser ? "var(--shadow-glow-indigo)" : "var(--shadow-sm)"
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        fontSize: "0.9rem",
+                                        lineHeight: "1.5",
+                                        color: isUser ? "#fff" : "var(--color-text-primary)",
+                                        whiteSpace: isUser ? "pre-wrap" : undefined
+                                      }}
+                                    >
+                                      {isUser ? msg.content : formatMessageContent(msg.content)}
+                                    </div>
+                                    <div
+                                      style={{
+                                        fontSize: "0.7rem",
+                                        color: isUser ? "rgba(255,255,255,0.7)" : "var(--color-text-muted)",
+                                        textAlign: "right",
+                                        marginTop: "0.4rem"
+                                      }}
+                                    >
+                                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+
+                          {sendingMessage && (
+                            <div style={{ display: "flex", justifyContent: "flex-start", width: "100%" }}>
+                              <div
+                                className="glass-panel"
+                                style={{
+                                  padding: "1rem 1.25rem",
+                                  borderRadius: "16px 16px 16px 2px",
+                                  background: "rgba(30, 35, 50, 0.55)",
+                                  border: "var(--border-glass)"
+                                }}
+                              >
+                                <div className="typing-indicator">
+                                  <span className="typing-dot" />
+                                  <span className="typing-dot" />
+                                  <span className="typing-dot" />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          <div ref={chatBottomRef} />
+                        </div>
+
+                        {/* Input Box */}
+                        <form
+                          onSubmit={handleSendMessage}
+                          style={{
+                            padding: "1.25rem 2rem",
+                            borderTop: "var(--border-glass)",
+                            background: "rgba(10, 12, 22, 0.4)",
+                            display: "flex",
+                            gap: "0.75rem",
+                            alignItems: "center",
+                            flexShrink: 0
+                          }}
+                        >
+                          <input
+                            type="text"
+                            placeholder="Ask a question about these notes..."
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            style={{ flexGrow: 1 }}
+                            disabled={sendingMessage}
+                          />
+                          <button
+                            type="submit"
+                            className="btn-primary"
+                            style={{
+                              padding: "0.75rem",
+                              borderRadius: "var(--radius-md)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0
+                            }}
+                            disabled={!chatInput.trim() || sendingMessage}
+                          >
+                            <Send size={18} />
+                          </button>
+                        </form>
+                      </>
+                    ) : (
+                      <div style={{ margin: "auto", maxWidth: "480px", textAlign: "center", padding: "2rem" }}>
+                        <HelpCircle size={40} color="var(--color-text-muted)" style={{ marginBottom: "1rem" }} />
+                        <h4 style={{ color: "#fff", marginBottom: "0.5rem" }}>No Chat Selected</h4>
+                        <p style={{ color: "var(--color-text-secondary)", fontSize: "0.85rem", marginBottom: "1.5rem" }}>
+                          Select an existing chat session from the left sidebar or click "+ New Chat" to start a new ChatGPT-style conversation on these study notes!
+                        </p>
+                        <button
+                          onClick={() => handleCreateSession()}
+                          className="btn-primary"
+                          style={{
+                            fontSize: "0.85rem",
+                            padding: "0.6rem 1.2rem",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.5rem"
+                          }}
+                        >
+                          <Sparkles size={14} />
+                          <span>Start New Chat</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1350,6 +1742,92 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* SHARING MODAL DIALOG */}
+      {isSharingModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0, 0, 0, 0.6)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: "1rem"
+          }}
+        >
+          <div
+            className="glass-panel animate-fade-in"
+            style={{
+              maxWidth: "500px",
+              width: "100%",
+              padding: "2rem",
+              background: "rgba(15, 18, 30, 0.9)"
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1.2rem" }}>
+              <Share2 size={22} color="var(--color-accent-indigo)" />
+              <h3 style={{ fontSize: "1.25rem", color: "#fff", margin: 0 }}>Share Chat Session</h3>
+            </div>
+            
+            <p style={{ color: "var(--color-text-secondary)", fontSize: "0.85rem", lineHeight: 1.5, marginBottom: "1.5rem" }}>
+              Give this link to your friend! Once they log in, they can view your chat history and collaborate on this chatbot conversation with you in real time.
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "1.5rem" }}>
+              <label style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>Shareable Link</label>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  type="text"
+                  readOnly
+                  value={`${window.location.origin}/?share=${sharingSessionCode}`}
+                  style={{
+                    flexGrow: 1,
+                    background: "rgba(255,255,255,0.03)",
+                    border: "var(--border-glass)",
+                    color: "var(--color-accent-indigo)",
+                    fontSize: "0.8rem",
+                    padding: "0.5rem 0.75rem"
+                  }}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                />
+                <button
+                  className="btn-primary"
+                  style={{ fontSize: "0.8rem", padding: "0.5rem 1rem" }}
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/?share=${sharingSessionCode}`);
+                    alert("Copied to clipboard!");
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setIsSharingModalOpen(false)}
+                style={{
+                  background: "transparent",
+                  color: "#fff",
+                  border: "var(--border-glass)",
+                  padding: "0.5rem 1.25rem",
+                  borderRadius: "var(--radius-md)",
+                  cursor: "pointer",
+                  fontSize: "0.85rem"
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

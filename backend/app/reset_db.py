@@ -9,6 +9,7 @@ from app.models.user import User
 from app.models.document import Document
 from app.models.chunk import DocumentChunk
 from app.models.chat_message import ChatMessage
+from app.models.chat_session import ChatSession, ChatSessionCollaborator
 
 print("Dropping all database tables...")
 Base.metadata.drop_all(bind=engine)
