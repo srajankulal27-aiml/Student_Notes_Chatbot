@@ -1190,7 +1190,7 @@ export default function App() {
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", padding: "3rem 1rem" }}>
                         <RefreshCw className="animate-float" size={32} color="var(--color-accent-purple)" style={{ animation: "skeleton-shimmer 2s infinite" }} />
                         <p style={{ color: "var(--color-text-secondary)" }}>
-                          Gemini is summarizing notes details...
+                          RAG AI is summarizing notes details...
                         </p>
                       </div>
                     )}
@@ -1720,7 +1720,7 @@ export default function App() {
             >
               {[
                 { title: "AI Summarizer", desc: "Get an overview of key topics instantly" },
-                { title: "Direct Chat", desc: "Ask specific queries to Gemini RAG" },
+                { title: "Direct Chat", desc: "Ask specific queries to RAG AI" },
                 { title: "Keyword Search", desc: "Find formulas and topics in notes quickly" }
               ].map((feature, i) => (
                 <div

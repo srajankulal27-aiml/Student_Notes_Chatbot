@@ -1,21 +1,14 @@
-import os
 from typing import List
 # pyrefly: ignore [missing-import]
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, Depends, status, Response, HTTPException
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.models.document import Document
-from app.models.chunk import DocumentChunk
-from app.models.chat_session import ChatSession, ChatSessionCollaborator
 from app.schemas.document import DocumentResponse
-from app.services.pdf_service import save_pdf, extract_text
-from app.services.embedding_service import generate_embeddings
-from app.services.faiss_service import create_faiss_index
-from app.services.chunk_service import chunk_text
-from app.services.gemini_service import generate_summary
+from app.services import document_service
 
 router = APIRouter(
     prefix="/documents",
@@ -23,195 +16,101 @@ router = APIRouter(
 )
 
 
-# -----------------------------
-# Upload Document
-# -----------------------------
 @router.post("/upload", response_model=DocumentResponse)
 def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Check PDF extension
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are allowed"
-        )
+    """
+    Why it is written:
+        To provide an API endpoint for users to upload lecture notes PDFs.
 
-    # Save PDF to disk
-    filepath = save_pdf(file)
+    What it does:
+        Delegates the PDF parsing, S3 storage, LangChain chunking, FastEmbed vector generation,
+        and Qdrant indexing to the document_service.
 
-    # Create Database entry
-    new_doc = Document(
-        filename=file.filename,
-        filepath=filepath,
-        user_id=current_user.id
-    )
-    db.add(new_doc)
-    db.commit()
-    db.refresh(new_doc)
+    Inputs:
+        file: UploadFile - The uploaded PDF file.
+        db: Session - Database session.
+        current_user: User - Authenticated user.
 
-    try:
-        # Extract text
-        text = extract_text(filepath)
-        if not text.strip():
-            # If text is empty, provide placeholder or warning
-            text = "No readable text found in PDF."
-
-        # Split into chunks
-        chunks = chunk_text(text)
-        if chunks:
-            # Generate embeddings
-            embeddings = generate_embeddings(chunks)
-
-            # Build and save FAISS index
-            create_faiss_index(
-                document_id=new_doc.id,
-                chunks=chunks,
-                embeddings=embeddings
-            )
-
-            # Save chunks to PostgreSQL
-            db_chunks = [
-                DocumentChunk(
-                    document_id=new_doc.id,
-                    content=chunk,
-                    chunk_index=i
-                )
-                for i, chunk in enumerate(chunks)
-            ]
-            db.add_all(db_chunks)
-            db.commit()
-
-        # Generate summary using Gemini service
-        summary = generate_summary(text)
-        new_doc.summary = summary
-        db.commit()
-        db.refresh(new_doc)
-
-    except Exception as e:
-        # Cleanup database if any failure occurs during processing
-        db.delete(new_doc)
-        db.commit()
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process PDF: {str(e)}"
-        )
-
-    return new_doc
+    Outputs:
+        DocumentResponse - Metadata of the created document.
+    """
+    return document_service.process_document_upload(file, db, current_user)
 
 
-# -----------------------------
-# List Documents
-# -----------------------------
 @router.get("/", response_model=List[DocumentResponse])
 def list_documents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Owned documents
-    owned = db.query(Document).filter(
-        Document.user_id == current_user.id
-    ).all()
-    
-    # Collaborative documents (documents the user is a collaborator on via chat sessions)
-    shared = db.query(Document).join(ChatSession).join(
-        ChatSessionCollaborator, ChatSessionCollaborator.session_id == ChatSession.id
-    ).filter(
-        ChatSessionCollaborator.user_id == current_user.id
-    ).all()
-    
-    # Merge lists uniquely
-    combined = list({doc.id: doc for doc in (owned + shared)}.values())
-    combined.sort(key=lambda d: d.uploaded_at, reverse=True)
-    return combined
+    """
+    Why it is written:
+        To provide an API endpoint that lists all documents a user owns or collaborates on.
+
+    What it does:
+        Delegates database querying for user-accessible documents to the document_service.
+
+    Inputs:
+        db: Session - Database session.
+        current_user: User - Authenticated user.
+
+    Outputs:
+        List[DocumentResponse] - Accessible documents metadata list.
+    """
+    return document_service.list_user_documents(db, current_user)
 
 
-# -----------------------------
-# Get Single Document Details
-# -----------------------------
 @router.get("/{document_id}", response_model=DocumentResponse)
 def get_document(
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+    """
+    Why it is written:
+        To provide an API endpoint to fetch a single document's metadata by ID.
 
-    # Check access permission
-    is_owner = doc.user_id == current_user.id
-    is_collaborator = db.query(ChatSessionCollaborator).join(ChatSession).filter(
-        ChatSession.document_id == document_id,
-        ChatSessionCollaborator.user_id == current_user.id
-    ).first() is not None
+    What it does:
+        Delegates retrieval and permission checking of a single document to the document_service.
 
-    if not is_owner and not is_collaborator:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document"
-        )
+    Inputs:
+        document_id: int - The identifier of the document.
+        db: Session - Database session.
+        current_user: User - Authenticated user.
 
-    return doc
+    Outputs:
+        DocumentResponse - The requested document metadata.
+    """
+    return document_service.get_document_by_id(document_id, db, current_user)
 
 
-# -----------------------------
-# Delete Document
-# -----------------------------
 @router.delete("/{document_id}")
 def delete_document(
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    doc = db.query(Document).filter(
-        Document.id == document_id,
-        Document.user_id == current_user.id
-    ).first()
+    """
+    Why it is written:
+        To provide an API endpoint to delete an uploaded document.
 
-    if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+    What it does:
+        Delegates document deletion (PostgreSQL, S3, Qdrant) to the document_service.
 
-    # Delete PDF file from disk
-    if os.path.exists(doc.filepath):
-        try:
-            os.remove(doc.filepath)
-        except Exception as e:
-            print(f"Error removing PDF file: {e}")
+    Inputs:
+        document_id: int - The identifier of the document.
+        db: Session - Database session.
+        current_user: User - Authenticated user.
 
-    # Delete FAISS files
-    faiss_index_path = f"faiss_indexes/{document_id}.index"
-    faiss_meta_path = f"faiss_indexes/{document_id}.pkl"
-    if os.path.exists(faiss_index_path):
-        try:
-            os.remove(faiss_index_path)
-        except Exception as e:
-            print(f"Error removing FAISS index: {e}")
-    if os.path.exists(faiss_meta_path):
-        try:
-            os.remove(faiss_meta_path)
-        except Exception as e:
-            print(f"Error removing FAISS metadata: {e}")
-
-    db.delete(doc)
-    db.commit()
-
-    return {"message": "Document and all index records deleted successfully."}
+    Outputs:
+        dict - A JSON confirmation response.
+    """
+    return document_service.delete_user_document(document_id, db, current_user)
 
 
-# -----------------------------
-# Keyword Search in Document Chunks
-# -----------------------------
 @router.get("/{document_id}/search")
 def keyword_search(
     document_id: int,
@@ -219,40 +118,63 @@ def keyword_search(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
+    """
+    Why it is written:
+        To provide an API endpoint to run a traditional substring keyword query in document chunks.
+
+    What it does:
+        Delegates substring SQL matching to the document_service.
+
+    Inputs:
+        document_id: int - The identifier of the document.
+        query: str - The query term.
+        db: Session - Database session.
+        current_user: User - Authenticated user.
+
+    Outputs:
+        List[dict] - The list of matching text chunks.
+    """
+    return document_service.search_document_keywords(document_id, query, db, current_user)
+
+
+@router.get("/{document_id}/download")
+def download_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Why it is written:
+        To provide an API endpoint to download the original PDF file stored inside AWS S3 or the database.
+
+    What it does:
+        Fetches the document by ID, validates the user's access permissions.
+        If the file is stored in S3 (i.e. filepath is an HTTP/S URL), returns a RedirectResponse
+        to download it directly from S3. Otherwise, falls back to serving the binary data from the DB.
+
+    Inputs:
+        document_id: int - The identifier of the document.
+        db: Session - Database session.
+        current_user: User - Authenticated user.
+
+    Outputs:
+        Response - A redirect to the S3 URL or the binary PDF file content.
+    """
+    doc = document_service.get_document_by_id(document_id, db, current_user)
+    
+    if doc.filepath.startswith("http://") or doc.filepath.startswith("https://"):
+        return RedirectResponse(url=doc.filepath)
+        
+    if not doc.pdf_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
+            detail="PDF data not found for this document"
         )
-
-    # Check access permission
-    is_owner = doc.user_id == current_user.id
-    is_collaborator = db.query(ChatSessionCollaborator).join(ChatSession).filter(
-        ChatSession.document_id == document_id,
-        ChatSessionCollaborator.user_id == current_user.id
-    ).first() is not None
-
-    if not is_owner and not is_collaborator:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document"
-        )
-
-    if not query.strip():
-        return []
-
-    # Simple ILIKE search in document chunks
-    results = db.query(DocumentChunk).filter(
-        DocumentChunk.document_id == document_id,
-        DocumentChunk.content.ilike(f"%{query}%")
-    ).order_by(DocumentChunk.chunk_index.asc()).all()
-
-    return [
-        {
-            "id": r.id,
-            "chunk_index": r.chunk_index,
-            "content": r.content
+        
+    return Response(
+        content=doc.pdf_data,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{doc.filename}"'
         }
-        for r in results
-    ]
+    )

@@ -35,3 +35,7 @@ class ChatMessageResponse(BaseModel):
     timestamp: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RenameSessionRequest(BaseModel):
+    title: str

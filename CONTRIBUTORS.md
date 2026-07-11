@@ -5,8 +5,8 @@ This document lists the contributors who have worked on the Student Notes Chatbo
 ## Team Members
 - [ ] **Srajan M Kulal** (srajankulal27-aiml)
 - [ ] **Akash M S** (AkashMS-2005)
-- [ ] **[Member 3 Name]** ([Member 3 GitHub Username])
-- [ ] **[Member 4 Name]** ([Member 4 GitHub Username])
+- [ ] **[Rahul N S]** ([rahulgowda843138-cell ])
+- [ ] **[Najjebullah ]** ([mohammednajeebulla-2004 ])
 
 ---
 *Instructions for each member to log their contribution:*

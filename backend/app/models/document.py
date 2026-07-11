@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -11,6 +11,7 @@ class Document(Base):
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String(255), nullable=False)
     filepath = Column(String(500), nullable=False)
+    pdf_data = Column(LargeBinary, nullable=True)
     summary = Column(String, nullable=True)
 
     uploaded_at = Column(
