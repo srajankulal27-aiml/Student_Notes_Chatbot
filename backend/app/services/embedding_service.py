@@ -2,9 +2,9 @@
 from fastembed import TextEmbedding
 
 # Initialize FastEmbed text embedding model.
-# By default, it loads BAAI/bge-small-en-v1.5 which creates 384-dimensional vectors.
-# We initialize it globally once to reuse across multiple document/query embedding tasks.
-model = TextEmbedding()
+# Using 'all-MiniLM-L6-v2' (384 dimensions) because it is extremely lightweight,
+# helping to prevent Out of Memory (OOM) crashes on Render's 512MB free tier.
+model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2", threads=1)
 
 
 def generate_embeddings(chunks: list[str]) -> list:
