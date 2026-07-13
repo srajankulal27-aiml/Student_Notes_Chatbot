@@ -882,9 +882,12 @@ export default function App() {
     }
   };
 
-  const handleDownloadPDF = (docId: number, filename: string) => {
-    window.open(`${API_BASE}/documents/${docId}/download?token=${encodeURIComponent(token || "")}`, "_blank");
-  };
+const handleDownloadPDF = (docId: number) => {
+  window.open(
+    `${API_BASE}/documents/${docId}/download?token=${encodeURIComponent(token || "")}`,
+    "_blank"
+  );
+};
 
   const handleSaveRename = async (sessionId: number) => {
     if (!renameTitleInput.trim() || !token) {
