@@ -50,14 +50,26 @@ def process_document_upload(file: UploadFile, db: Session, current_user: User) -
             detail="Only PDF files are allowed"
         )
 
-    # 2. Upload file to AWS S3
-    filepath = upload_file_to_s3(file)
+    # Read the file bytes
+    file.file.seek(0)
+    file_bytes = file.file.read()
+    file.file.seek(0)
 
-    # 3. Create database document metadata record with S3 URL
+    # 2. Upload file to AWS S3, fallback to DB storage
+    filepath = None
+    pdf_data_to_store = None
+    try:
+        filepath = upload_file_to_s3(file)
+    except ValueError:
+        # Fallback if S3 is not configured
+        filepath = f"db://{file.filename}"
+        pdf_data_to_store = file_bytes
+
+    # 3. Create database document metadata record
     new_doc = Document(
         filename=file.filename,
         filepath=filepath,
-        pdf_data=None,
+        pdf_data=pdf_data_to_store,
         user_id=current_user.id
     )
     db.add(new_doc)
@@ -65,8 +77,8 @@ def process_document_upload(file: UploadFile, db: Session, current_user: User) -
     db.refresh(new_doc)
 
     try:
-        # 4. Extract text from the S3 URL
-        text = extract_text(filepath)
+        # 4. Extract text from the S3 URL or raw bytes
+        text = extract_text(file_bytes if pdf_data_to_store else filepath)
         if not text.strip():
             text = "No readable text found in PDF."
 
