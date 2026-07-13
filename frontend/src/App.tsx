@@ -1742,7 +1742,7 @@ const handleDownloadPDF = (docId: number) => {
                                     </div>
                                   </div>
                                   <button
-                                    onClick={() => handleDownloadPDF(activeDoc.id, activeDoc.filename)}
+                                    onClick={() => handleDownloadPDF(activeDoc.id)}
                                     className="btn-primary"
                                     style={{
                                       fontSize: "0.75rem",
