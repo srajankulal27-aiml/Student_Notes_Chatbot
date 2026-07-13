@@ -1,6 +1,6 @@
 import React from "react";
 import { Sparkles } from "lucide-react";
-import { ContentBlock } from "../types";
+import type { ContentBlock } from "../types";
 
 export const safeBase64 = (str: string): string => {
   try {

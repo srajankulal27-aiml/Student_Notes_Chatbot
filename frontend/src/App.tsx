@@ -9,7 +9,6 @@ import {
   Send,
   Sparkles,
   RefreshCw,
-  AlertCircle,
   FileText,
   HelpCircle,
   History,
@@ -19,7 +18,7 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-import { Document, ChatMessage, ChatSession, SearchResult, UserProfile } from "./types";
+import type { Document, ChatMessage, ChatSession, SearchResult, UserProfile } from "./types";
 import { formatMessageContent } from "./utils/formatters";
 import AuthView from "./components/AuthView";
 
